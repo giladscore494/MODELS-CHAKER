@@ -1,208 +1,207 @@
 import streamlit as st
 from google import genai
 
-st.set_page_config(page_title="Gemini Models Explorer", page_icon="🔍", layout="wide")
+st.set_page_config(page_title="Google GenAI Models Explorer", page_icon="🧭", layout="wide")
 
-st.title("🔍 Gemini Models Explorer")
-st.write("רשימת מודלי Gemini שניתן להשתמש בהם מהאפליקציה שלך, כולל סוג שימוש מומלץ.")
+st.title("🧭 Google GenAI Models Explorer")
+st.write("מציג *כל* המודלים שהמפתח שלך רואה דרך ה-SDK (לא רק Gemini), עם סינון וחיפוש.")
 
-# --- קריאת מפתח מה-secrets ---
-API_KEY = (
-    st.secrets.get("GOOGLE_API_KEY")
-    or st.secrets.get("GEMINI_API_KEY")
-)
-
+# --- API KEY מה-secrets ---
+API_KEY = st.secrets.get("GOOGLE_API_KEY") or st.secrets.get("GEMINI_API_KEY")
 if not API_KEY:
     st.error("חסר מפתח API. הגדר GOOGLE_API_KEY או GEMINI_API_KEY ב־secrets.toml של Streamlit.")
     st.stop()
 
-# יצירת לקוח ל-Gemini Developer API
 client = genai.Client(api_key=API_KEY)
 
+# ---------- helpers ----------
+def to_str(x):
+    try:
+        return "" if x is None else str(x)
+    except Exception:
+        return ""
 
-# --- Fallback סטטי (למקרה שה-API לא מחזיר כלום) ---
-FALLBACK_MODELS = [
-    {"id": "gemini-2.5-pro", "category": "Chat / Reasoning", "notes": "מודל חזק לחשיבה מרובת שלבים, קוד וניתוח מורכב."},
-    {"id": "gemini-2.5-flash", "category": "Chat / General", "notes": "מהיר וזול יחסית, מתאים לצ'אט, סיכומים ועומס גבוה."},
-    {"id": "gemini-2.5-flash-lite", "category": "Chat / Cost-Optimized", "notes": "גרסה קלה וזולה לעומסים כבדים ו-latency נמוך."},
-    {"id": "gemini-3-pro-preview", "category": "Chat / Reasoning (Preview)", "notes": "דור חדש, כרגע ב-Preview – מומלץ ל-POC בלבד."},
-    {"id": "gemini-flash-latest", "category": "Chat / General (Alias)", "notes": "Alias למודל Flash האחרון."},
-    {"id": "gemini-pro-latest", "category": "Chat / Reasoning (Alias)", "notes": "Alias למודל Pro האחרון."},
-    {"id": "text-embedding-004", "category": "Embeddings", "notes": "מודל embedding למשימות חיפוש ו-clustering."},
-    {"id": "gemini-embedding-001", "category": "Embeddings", "notes": "מודל embedding נוסף, מתאים ליישומי טקסט כלליים."},
-    {"id": "imagen-4.0-generate-001", "category": "Image Generation", "notes": "יצירת תמונות מטקסט."},
-    {"id": "veo-3.0-generate-001", "category": "Video Generation", "notes": "יצירת וידאו מטקסט/תיאור."},
-]
-
-
-def classify_type(short_id: str) -> str:
-    sid = short_id.lower()
-
+def classify_family(model_id: str) -> str:
+    sid = (model_id or "").lower()
+    # משפחות/יכולות נפוצות
     if "embedding" in sid:
         return "Embeddings"
-
-    if "imagen" in sid or "veo" in sid or "image" in sid:
+    if any(k in sid for k in ["imagen", "image", "veo", "video"]):
         return "Image / Video"
-
-    if "live" in sid or "tts" in sid or "native-audio" in sid or "audio" in sid:
+    if any(k in sid for k in ["audio", "tts", "asr", "native-audio", "live"]):
         return "Audio / Live"
-
     if "gemma" in sid:
-        return "Chat / Lightweight (Gemma)"
-
+        return "Gemma (Lightweight LLM)"
     if "gemini" in sid:
-        return "Chat / General"
-
+        return "Gemini (LLM)"
     return "Other / Tools"
 
-
-def is_recommended(short_id: str) -> bool:
-    sid = short_id.lower()
-    recommended_ids = [
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-        "gemini-flash-latest",
-        "gemini-pro-latest",
-        "gemini-3-pro-preview",
-        "text-embedding-004",
-        "gemini-embedding-001",
-        "imagen-4.0-generate-001",
-        "veo-3.0-generate-001",
-    ]
-    return any(sid == r or sid.endswith("/" + r) for r in recommended_ids)
-
+def extract_short_id(full_name: str) -> str:
+    if not full_name:
+        return ""
+    return full_name.split("/")[-1]
 
 @st.cache_data(show_spinner=True)
-def fetch_models_from_api():
-    """ניסיון להביא רשימת מודלים מה-Gemini API. אם ריק – נחזיר []."""
+def fetch_models():
     items = []
+    err = None
     try:
         pager = client.models.list()
         for m in pager:
-            name = getattr(m, "name", "") or getattr(m, "model", "")
+            name = getattr(m, "name", None) or getattr(m, "model", None) or ""
+            name = to_str(name).strip()
             if not name:
                 continue
 
-            short_id = name.split("/")[-1]
+            short_id = extract_short_id(name)
 
-            display_name = getattr(m, "display_name", "") or ""
-            description = getattr(m, "description", "") or ""
+            display_name = to_str(getattr(m, "display_name", "")) or ""
+            description = to_str(getattr(m, "description", "")) or ""
+
+            # יש SDK-ים שמחזירים שדות נוספים – ננסה בעדינות
+            version = to_str(getattr(m, "version", "")) or ""
+            input_token_limit = to_str(getattr(m, "input_token_limit", "")) or to_str(getattr(m, "inputTokenLimit", ""))
+            output_token_limit = to_str(getattr(m, "output_token_limit", "")) or to_str(getattr(m, "outputTokenLimit", ""))
+            supported_actions = getattr(m, "supported_actions", None) or getattr(m, "supportedActions", None)
+            if supported_actions is None:
+                supported_actions_str = ""
+            else:
+                try:
+                    supported_actions_str = ", ".join([to_str(x) for x in supported_actions])
+                except Exception:
+                    supported_actions_str = to_str(supported_actions)
 
             items.append(
                 {
-                    "full_id": name,
-                    "id": short_id,
-                    "display_name": display_name,
-                    "description": description,
-                    "type": classify_type(short_id),
-                    "recommended": is_recommended(short_id),
+                    "Full ID": name,
+                    "Short ID": short_id,
+                    "Family": classify_family(short_id),
+                    "Display Name": display_name,
+                    "Version": version,
+                    "Input Token Limit": input_token_limit,
+                    "Output Token Limit": output_token_limit,
+                    "Supported Actions": supported_actions_str,
+                    "Description": description,
                 }
             )
     except Exception as e:
-        st.warning(f"models.list() נכשל מה-API: {e}")
-    return items
+        err = str(e)
 
+    return items, err
 
-api_models = fetch_models_from_api()
-
-# --- פילטרים בצד ---
+# ---------- UI controls ----------
 with st.sidebar:
-    st.header("⚙️ פילטרים")
-    show_only_recommended = st.checkbox("רק מודלים מומלצים לשימוש שוטף", value=True)
-    type_filter = st.multiselect(
-        "סינון לפי סוג מודל",
-        options=["Chat / General", "Chat / Lightweight (Gemma)", "Embeddings", "Image / Video", "Audio / Live", "Other / Tools"],
-        default=["Chat / General", "Chat / Lightweight (Gemma)", "Embeddings", "Image / Video", "Audio / Live"],
+    st.header("⚙️ סינון")
+    q = st.text_input("🔎 חיפוש (שם/ID/תיאור):", value="").strip().lower()
+
+    families = [
+        "Gemini (LLM)",
+        "Gemma (Lightweight LLM)",
+        "Embeddings",
+        "Image / Video",
+        "Audio / Live",
+        "Other / Tools",
+    ]
+    default_families = families  # מציג הכול כברירת מחדל
+    family_filter = st.multiselect("סינון לפי Family", options=families, default=default_families)
+
+    # טיפ קטן: לפעמים אנשים רוצים לראות רק Gemini/Gemma
+    quick = st.radio(
+        "Quick filter",
+        options=["All", "Only LLMs (Gemini/Gemma)", "Only Embeddings", "Only Image/Video", "Only Audio/Live"],
+        index=0,
     )
-    search_text = st.text_input("🔎 חיפוש לפי שם/תיאור/ID:", value="")
 
-# --- תצוגת API ---
+# ---------- fetch ----------
+st.subheader("תוצאה מה-API (SDK)")
+models, err = fetch_models()
 
-st.subheader("תוצאה מה-API הרשמי")
+if err:
+    st.warning(f"models.list() נכשל: {err}")
 
-if len(api_models) == 0:
-    st.info(
-        "ה-SDK לא החזיר מודלים (0 תוצאות). "
-        "זה יכול להיות בגלל סוג החשבון/מפתח. "
-        "למטה תוצג רשימת מודלים סטנדרטית לפי הדוקומנטציה."
-    )
-    st.write("📦 נמצאו **0 מודלים** מה-API.")
-else:
-    # סינון
-    filtered_api = []
-    q = (search_text or "").strip().lower()
+if not models:
+    st.info("לא התקבלו מודלים מה-API. זה יכול להיות הרשאות/מפתח/endpoint. נסה מפתח אחר או בדוק שה-API פעיל בפרויקט.")
+    st.stop()
 
-    for m in api_models:
-        if m["type"] not in type_filter:
-            continue
-        if show_only_recommended and not m["recommended"]:
-            continue
+# ---------- apply quick filter ----------
+def quick_match(row):
+    fam = row.get("Family", "")
+    if quick == "All":
+        return True
+    if quick == "Only LLMs (Gemini/Gemma)":
+        return fam in ["Gemini (LLM)", "Gemma (Lightweight LLM)"]
+    if quick == "Only Embeddings":
+        return fam == "Embeddings"
+    if quick == "Only Image/Video":
+        return fam == "Image / Video"
+    if quick == "Only Audio/Live":
+        return fam == "Audio / Live"
+    return True
 
-        blob = " ".join(
-            [
-                str(m.get("id", "")),
-                str(m.get("full_id", "")),
-                str(m.get("display_name", "")),
-                str(m.get("description", "")),
-                str(m.get("type", "")),
-            ]
-        ).lower()
-        if q and q not in blob:
-            continue
+filtered = []
+for row in models:
+    if row["Family"] not in family_filter:
+        continue
+    if not quick_match(row):
+        continue
 
-        filtered_api.append(m)
-
-    st.write(f"📦 נמצאו **{len(filtered_api)}** מודלים אחרי סינון.")
-
-    # טבלה קומפקטית
-    if filtered_api:
-        table_data = [
-            {
-                "ID קצר": m["id"],
-                "ID מלא": m["full_id"],
-                "סוג": m["type"],
-                "מומלץ": "✅" if m["recommended"] else "",
-                "Display Name": m["display_name"],
-            }
-            for m in filtered_api
-        ]
-        st.dataframe(table_data, use_container_width=True)
-
-    # פירוט לכל מודל
-    st.markdown("---")
-    for m in filtered_api:
-        with st.expander(f'{m["id"]}  ·  {m["type"]}', expanded=False):
-            st.write("**ID מלא:**", m.get("full_id", "—"))
-            st.write("**Display Name:**", m.get("display_name") or "—")
-            st.write("**סוג:**", m.get("type", "—"))
-            st.write("**מומלץ לשימוש שוטף:**", "✅ כן" if m.get("recommended") else "—")
-            st.write("**Description:**", m.get("description") or "—")
-
-st.markdown("---")
-
-# --- תצוגת Fallback סטטי ---
-
-st.subheader("Fallback – רשימת מודלים סטנדרטית לפי הדוקומנטציה")
-
-search_fb = st.text_input("חיפוש במודלי fallback (id / category / הערות):", key="search_fb")
-q_fb = (search_fb or "").strip().lower()
-
-filtered_fb = []
-for m in FALLBACK_MODELS:
     blob = " ".join(
         [
-            str(m.get("id", "")),
-            str(m.get("category", "")),
-            str(m.get("notes", "")),
+            to_str(row.get("Full ID", "")),
+            to_str(row.get("Short ID", "")),
+            to_str(row.get("Display Name", "")),
+            to_str(row.get("Description", "")),
+            to_str(row.get("Family", "")),
+            to_str(row.get("Supported Actions", "")),
         ]
     ).lower()
-    if q_fb and q_fb not in blob:
+
+    if q and q not in blob:
         continue
-    filtered_fb.append(m)
 
-st.write(f"📦 נמצאו **{len(filtered_fb)}** מודלים ברשימת ה-fallback.")
+    filtered.append(row)
 
-for m in filtered_fb:
-    with st.expander(str(m.get("id", "")), expanded=False):
-        st.write("**קטגוריה:**", m.get("category", "—"))
-        st.write("**הערות:**", m.get("notes", "—"))
+# ---------- output ----------
+col1, col2, col3 = st.columns([1, 1, 2])
+with col1:
+    st.metric("סה״כ מודלים שהתקבלו", len(models))
+with col2:
+    st.metric("אחרי סינון", len(filtered))
+with col3:
+    st.caption("אם אתה מחפש ספציפית Gemini 3 Flash, נסה לחפש: `3` / `flash` / `latest` / `preview` בשדה החיפוש.")
+
+# טבלה
+st.dataframe(
+    [
+        {
+            "Short ID": r["Short ID"],
+            "Family": r["Family"],
+            "Display Name": r["Display Name"],
+            "Input": r["Input Token Limit"],
+            "Output": r["Output Token Limit"],
+            "Supported Actions": r["Supported Actions"],
+            "Full ID": r["Full ID"],
+        }
+        for r in filtered
+    ],
+    use_container_width=True,
+    hide_index=True,
+)
+
+st.markdown("---")
+st.subheader("פירוט מודלים (Expand)")
+
+for r in filtered:
+    title = f'{r["Short ID"]}  ·  {r["Family"]}'
+    with st.expander(title, expanded=False):
+        st.write("**Full ID:**", r["Full ID"] or "—")
+        st.write("**Display Name:**", r["Display Name"] or "—")
+        st.write("**Family:**", r["Family"] or "—")
+        st.write("**Version:**", r["Version"] or "—")
+        st.write("**Input Token Limit:**", r["Input Token Limit"] or "—")
+        st.write("**Output Token Limit:**", r["Output Token Limit"] or "—")
+        st.write("**Supported Actions:**", r["Supported Actions"] or "—")
+        st.write("**Description:**", r["Description"] or "—")
+
+st.markdown("---")
+st.caption("הערה: הרשימה תלויה במפתח/הרשאות/endpoint (Developer API vs Vertex AI). אם מודל לא מופיע – יכול להיות שהוא לא פתוח לחשבון שלך עדיין.")
